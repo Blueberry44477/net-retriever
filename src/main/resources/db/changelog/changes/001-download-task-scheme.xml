@@ -1,0 +1,45 @@
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.6.xsd
+    http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd">
+   
+    <changeSet id="13-09-2026-001" author="blueberry44477">
+      <comment>Create download_task table</comment>
+      <createTable tableName="download_task">
+          <column name="id" type="BINARY(16)">
+              <constraints nullable="false" primaryKey="true" primaryKeyName="pk_download_task"/>
+          </column>
+          <column name="url" type="VARCHAR(2048)">
+              <constraints nullable="false"/>
+          </column>
+          <column name="file_name" type="VARCHAR(255)">
+              <constraints nullable="false"/>
+          </column>
+          <column name="save_path" type="VARCHAR(512)">
+              <constraints nullable="false"/>
+          </column>
+          <column name="status" type="VARCHAR(50)">
+              <constraints nullable="false"/>
+          </column>
+          <column name="total_bytes" type="BIGINT" defaultValueNumeric="0">
+              <constraints nullable="false"/>
+          </column>
+          <column name="downloaded_bytes" type="BIGINT" defaultValueNumeric="0">
+              <constraints nullable="false"/>
+          </column>
+          <column name="error_message" type="TEXT"/>
+          <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+              <constraints nullable="false"/>
+          </column>
+          <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+              <constraints nullable="false"/>
+          </column>
+      </createTable>
+
+      <createIndex indexName="idx_download_task_status" tableName="download_task">
+          <column name="status"/>
+      </createIndex>
+    </changeSet>
+</databaseChangeLog>
