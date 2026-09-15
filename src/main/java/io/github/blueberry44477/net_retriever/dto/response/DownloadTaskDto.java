@@ -19,7 +19,7 @@ public class DownloadTaskDto {
     private UUID id;
     private String url;
     private String fileName;
-    // private String savePath;
+    private String savePath;
     private DownloadStatus status;
     Long downloadedBytes;
     Long totalBytes;

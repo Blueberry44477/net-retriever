@@ -17,18 +17,19 @@ import io.github.blueberry44477.net_retriever.model.DownloadTask;
 import io.github.blueberry44477.net_retriever.repository.DownloadTaskRepository;
 import io.github.blueberry44477.net_retriever.service.downloader.DownloadMetadata;
 import io.github.blueberry44477.net_retriever.service.downloader.FileDownloader;
+import io.github.blueberry44477.net_retriever.service.storage.StoragePathResolver;
 import lombok.RequiredArgsConstructor;
 
 @Service 
 @RequiredArgsConstructor 
 public class DownloadTaskService {
+    private final StoragePathResolver pathResolver;
     private final DownloadTaskRepository repository;
     private final List<FileDownloader> downloaders;
     private final ExecutorService executorService;
     private final Map<UUID, Future<?>> activeTasks = new ConcurrentHashMap<>();
 
-    @Transactional
-    public DownloadTask createTask(URI source, Path destinationDirectory) throws IOException {
+    public DownloadTask createTask(URI source, String destination) throws IOException {
         FileDownloader downloader = downloaders.stream()
             .filter(d -> d.supports(source))
             .findFirst()
@@ -37,9 +38,16 @@ public class DownloadTaskService {
         DownloadMetadata metadata = downloader.fetchMetadata(source);
 
         String fileName = resolveFileName(source, metadata);
-        Path fullDestinationPath = destinationDirectory.resolve(fileName);
+        Path fullDestinationPath = pathResolver.resolve(destination, fileName);
 
-        return new DownloadTask(source.toString(), fileName, fullDestinationPath.toString());
+        return saveNewTask(source.toString(), fileName, fullDestinationPath.toString(), metadata.getTotalBytes());
+    }
+
+    @Transactional
+    protected DownloadTask saveNewTask(String url, String fileName, String savePath, Long totalBytes) {
+        DownloadTask task = new DownloadTask(url, fileName, savePath);
+
+        return repository.save(task);
     }
 
     private String resolveFileName(URI source, DownloadMetadata metadata) {
@@ -47,7 +55,6 @@ public class DownloadTaskService {
             return metadata.getSuggestedFileName();
         }
         
-        // Get last index of URI if server responses with no Content-Disposition.
         String path = source.getPath();
         if (path != null && path.contains("/")) {
             String extracted = path.substring(path.lastIndexOf('/') + 1);

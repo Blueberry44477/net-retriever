@@ -1,7 +1,12 @@
+app:
+  storage:
+    mode: local # 'local' or 'server'
+    root-dir: ${STORAGE_ROOT_DIR:./storage}
+
 spring:
   application:
     name: net-retriever
-
+  
   jpa:
     hibernate:
       ddl-auto: none
