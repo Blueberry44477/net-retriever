@@ -1,4 +1,4 @@
-package io.github.blueberry44477.net_retriever.service.downloader;
+package io.github.blueberry44477.net_retriever.downloader.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -10,7 +10,7 @@ import lombok.Setter;
 @AllArgsConstructor 
 @NoArgsConstructor 
 public class DownloadMetadata {
-    private long totalBytes;
+    private Long totalBytes;
     private boolean resumable;
     private String suggestedFileName;
 }

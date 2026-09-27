@@ -1,4 +1,4 @@
-package io.github.blueberry44477.net_retriever.model;
+package io.github.blueberry44477.net_retriever.downloadtask;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -7,6 +7,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.annotations.UuidGenerator;
 
+import io.github.blueberry44477.net_retriever.downloadtask.enums.DownloadStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -21,10 +22,6 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-/**
- * DownloadTask manages its own state transitions and progress calculations
- * adhering to the Information Expert pattern.
- */
 @Getter 
 @AllArgsConstructor 
 @NoArgsConstructor 
@@ -62,7 +59,7 @@ public class DownloadTask {
 
     @PositiveOrZero
     @Column(nullable = false)
-    private long totalBytes = 0L;
+    private Long totalBytes;
 
     private String errorMessage;
 

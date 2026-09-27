@@ -6,9 +6,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import io.github.blueberry44477.net_retriever.service.storage.LocalStoragePathResolver;
-import io.github.blueberry44477.net_retriever.service.storage.ServerStoragePathResolver;
-import io.github.blueberry44477.net_retriever.service.storage.StoragePathResolver;
+import io.github.blueberry44477.net_retriever.storage.LocalStoragePathResolver;
+import io.github.blueberry44477.net_retriever.storage.ServerStoragePathResolver;
+import io.github.blueberry44477.net_retriever.storage.StoragePathResolver;
 
 @Configuration
 public class StorageConfig {

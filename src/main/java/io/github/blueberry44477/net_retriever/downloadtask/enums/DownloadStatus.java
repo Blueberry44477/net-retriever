@@ -1,4 +1,4 @@
-package io.github.blueberry44477.net_retriever.model;
+package io.github.blueberry44477.net_retriever.downloadtask.enums;
 
 public enum DownloadStatus {
     CREATED,

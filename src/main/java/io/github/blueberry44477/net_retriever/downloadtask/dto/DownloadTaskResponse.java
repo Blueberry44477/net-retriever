@@ -1,9 +1,9 @@
-package io.github.blueberry44477.net_retriever.dto.response;
+package io.github.blueberry44477.net_retriever.downloadtask.dto;
 
 import java.time.Instant;
 import java.util.UUID;
 
-import io.github.blueberry44477.net_retriever.model.DownloadStatus;
+import io.github.blueberry44477.net_retriever.downloadtask.enums.DownloadStatus;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -15,7 +15,7 @@ import lombok.experimental.Accessors;
 @AllArgsConstructor 
 @NoArgsConstructor
 @Accessors(chain = true)
-public class DownloadTaskDto {
+public class DownloadTaskResponse {
     private UUID id;
     private String url;
     private String fileName;
