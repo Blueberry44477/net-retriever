@@ -1,6 +1,6 @@
 # NetRetriever
 
-> **NetRetriever** is a Java-based download manager developed as an architectural sandbox to explore, demonstrate, and test software engineering principles (**SOLID**, **GRASP**) and design patterns (**GoF Creational Patterns**).
+> **NetRetriever** is a Java-based download manager developed as an architectural sandbox to explore, demonstrate, and test software engineering principles (**SOLID**, **GRASP**) and design patterns (**GoF Creational, Structural & Behavioral Patterns**).
 
 ---
 
@@ -87,6 +87,36 @@ All creational patterns are implemented under [`io.github.blueberry44477.net_ret
 
 ---
 
+### 4. GoF Structural Design Patterns
+
+All structural patterns are implemented under [`io.github.blueberry44477.net_retriever.patterns.structural`](src/main/java/io/github/blueberry44477/net_retriever/patterns/structural/):
+
+| Pattern | Key Classes | Description |
+| :--- | :--- | :--- |
+| **Adapter (Object Adapter)** | `FileDownloader` *(Target)*<br>`LegacyFtpClient` *(Adaptee)*<br>`LegacyFtpDownloaderAdapter` *(Adapter)* | Implements **Object Adapter** using composition/aggregation (`private final Adaptee adaptee`) rather than class inheritance. Converts incompatible third-party legacy APIs (FTP control/passive streaming) into the standard domain `FileDownloader` contract (`fetchMetadata`, `download`, `supports`). |
+| **Bridge** | `DownloadOperation` *(Abstraction)*<br>`SimpleDownloadOperation`<br>`ResumableDownloadOperation`<br>`SplitChunkDownloadOperation` *(RefinedAbstractions)*<br>`DownloadTransport` *(Implementor)*<br>`HttpDownloadTransport`<br>`FtpDownloadTransport`<br>`CloudStorageTransport` *(ConcreteImplementors)* | Decouples download workflow execution logic (sequential streaming, byte-range resuming, parallel multi-chunk partitioning) from transport protocol implementations (HTTP/2, FTP, S3). Avoids $M \times N$ class proliferation and allows abstractions and implementors to vary independently at runtime. |
+| **Composite** | `DownloadItem` *(Component)*<br>`FileDownloadItem`<br>`MirroredFileDownloadItem` *(Leaves)*<br>`DownloadGroup`<br>`PriorityDownloadGroup` *(Composites)* | Composes download tasks into hierarchical part-whole tree structures. Allows clients to treat individual file downloads and multi-level composite download batches/folders uniformly (progress aggregation, cascading start/pause/cancel, tree printing). |
+| **Flyweight** | `ProtocolPolicyFlyweight` *(Flyweight)*<br>`SharedProtocolPolicy` *(ConcreteFlyweight)*<br>`ProtocolPolicyFactory` *(FlyweightFactory)*<br>`DownloadChunkContext` *(Context)* | Shares immutable intrinsic connection and protocol state (`protocol`, `host`, `port`, `bufferSize`, `authScheme`) across thousands of fine-grained download chunks (`chunkId`, `byteOffset`, `length`, `destination`), drastically reducing memory overhead and eliminating GC thrashing. |
+| **Decorator** | `FileDownloader` *(Component)*<br>`BaseFileDownloader` *(ConcreteComponent)*<br>`FileDownloaderDecorator` *(Decorator)*<br>`RateLimitingDownloaderDecorator`<br>`ChecksumVerifyingDownloaderDecorator`<br>`RetryDownloaderDecorator`<br>`LoggingMetricsDownloaderDecorator` *(ConcreteDecorators)* | Dynamically attaches orthogonal cross-cutting responsibilities (bandwidth rate-limiting, checksum integrity validation, automatic retry with backoff, telemetry duration metrics) to `FileDownloader` instances transparently without subclass explosion. Supports arbitrary composition pipelines. |
+| **Proxy** | `FileDownloader` *(Subject)*<br>`BaseFileDownloader` *(RealSubject)*<br>`AccessControlDownloaderProxy` *(ProtectionProxy)*<br>`CachingDownloaderProxy` *(CachingProxy)*<br>`LazyInitDownloaderProxy` *(VirtualProxy)* | Provides a surrogate/placeholder to control, guard, or optimize access to `FileDownloader`. Enforces domain security whitelists and HTTPS requirements (Protection Proxy), avoids duplicate remote metadata lookups via thread-safe memoization (Caching Proxy), and defers expensive resource allocation until first invocation (Virtual Proxy). |
+
+---
+
+### 5. GoF Behavioral Design Patterns
+
+All behavioral patterns are implemented under [`io.github.blueberry44477.net_retriever.patterns.behavioral`](src/main/java/io/github/blueberry44477/net_retriever/patterns/behavioral/):
+
+| Pattern | Key Classes | Description |
+| :--- | :--- | :--- |
+| **Chain of Responsibility** | `DownloadRequestHandler` *(AbstractHandler)*<br>`UriValidationHandler`<br>`AuthenticationHandler`<br>`ContentSecurityHandler`<br>`DiskSpaceValidationHandler`<br>`BandwidthQuotaHandler` *(ConcreteHandlers)*<br>`DownloadRequestPipeline` *(PipelineBuilder)* | Organizes pre-flight download verification into a decoupled, sequential pipeline of specialized handlers. Each handler evaluates one aspect (URI protocol syntax, bearer tokens, blacklist/extension safety, disk capacity, bandwidth quotas) and passes to its successor or short-circuits with a `DownloadValidationException`. |
+| **Command** | `DownloadCommand` *(Command)*<br>`DownloadTaskReceiver` *(Receiver)*<br>`StartDownloadCommand`<br>`PauseDownloadCommand`<br>`ResumeDownloadCommand`<br>`CancelDownloadCommand` *(ConcreteCommands)*<br>`BatchDownloadCommand` *(MacroCommand)*<br>`DownloadCommandInvoker` *(Invoker)* | Encapsulates task lifecycle actions as first-class objects, completely decoupling trigger senders from the receiver. Supports multi-level Undo/Redo stacks, transactional all-or-nothing batch/macro rollbacks, asynchronous execution queues, and an audit execution history log. |
+| **Iterator** | `TaskIterator` *(Iterator)*<br>`TaskCollection` *(Aggregate)*<br>`DownloadTaskCollection` *(ConcreteAggregate)*<br>`SequentialTaskIterator`<br>`StatusFilteredTaskIterator`<br>`PriorityTaskIterator` *(ConcreteIterators)* | Provides sequential access to aggregated download tasks without exposing the underlying internal collection. Supports concurrent traversal strategies: standard FIFO insertion order, status-filtered subsets (`DOWNLOADING`, `PAUSED`, `ERROR`), and priority sorting (descending file size or custom comparator) without mutating the underlying collection. |
+| **Mediator** | `DownloadSessionMediator` *(Mediator)*<br>`DownloadCoordinatorMediator` *(ConcreteMediator)*<br>`DownloadColleague` *(Colleague)*<br>`DownloaderColleague`<br>`StorageColleague`<br>`BandwidthColleague`<br>`NotificationColleague` *(ConcreteColleagues)* | Encapsulates and coordinates complex interactions among decoupled subsystems (network streaming engine, disk storage guardian, bandwidth QoS manager, notification alerts). Eliminates direct $M \times N$ colleague dependencies, orchestrating automated actions like emergency downloader pausing on low disk space and stream throttling during network congestion. |
+| **Memento** | `TaskMemento` *(NarrowMemento)*<br>`DownloadTaskMemento` *(WideMemento)*<br>`DownloadTaskOriginator` *(Originator)*<br>`DownloadCheckpointCaretaker` *(Caretaker)* | Captures and externalizes the complete internal execution state of download tasks without violating encapsulation. Provides a narrow interface to Caretakers for checkpoint stack management (Undo/Redo rollbacks and named milestone recovery) while granting wide restoration access only to the Originator. |
+| **Observer** | `DownloadObservable` *(Subject)*<br>`DownloadObserver` *(Observer)*<br>`DownloadProgressEvent` *(EventPayload)*<br>`DownloadTaskSubject` *(ConcreteSubject)*<br>`ConsoleProgressObserver`<br>`SpeedTelemetryObserver`<br>`AuditLoggingObserver`<br>`DownloadCompletionWebhookObserver` *(ConcreteObservers)* | Defines a one-to-many subscription dependency where subject state changes automatically notify and update diverse decoupled observers (real-time ASCII progress bar, throughput & ETA calculations, audit compliance logging, and completion/error HTTP webhooks). |
+
+---
+
 ## 📁 Project Structure
 
 ```
@@ -100,20 +130,48 @@ net-retriever/
 │   │   │   ├── downloader/             # Network downloader abstractions & HTTP implementation
 │   │   │   ├── downloadtask/           # Core DownloadTask entity, service, controller, repository
 │   │   │   ├── storage/                # Storage path resolvers (local and server modes)
-│   │   │   └── patterns/creational/    # GoF Creational Patterns Sandbox
-│   │   │       ├── singleton/          # Singleton pattern
-│   │   │       ├── prototype/          # Prototype pattern & registry
-│   │   │       ├── factory_method/     # Factory Method pattern
-│   │   │       ├── abstract_factory/   # Abstract Factory pattern & product families
-│   │   │       ├── builder/            # Builder pattern & Director
-│   │   │       ├── object_pool/        # Object Pool pattern
-│   │   │       └── CreationalPatternsDemo.java # CLI demonstration runner
+│   │   │   └── patterns/
+│   │   │       ├── creational/         # GoF Creational Patterns Sandbox
+│   │   │       │   ├── singleton/
+│   │   │       │   ├── prototype/
+│   │   │       │   ├── factory_method/
+│   │   │       │   ├── abstract_factory/
+│   │   │       │   ├── builder/
+│   │   │       │   ├── object_pool/
+│   │   │       │   └── CreationalPatternsDemo.java
+│   │   │       ├── structural/         # GoF Structural Patterns Sandbox
+│   │   │       │   ├── adapter/        # Object Adapter (LegacyFtpClient & LegacyFtpDownloaderAdapter)
+│   │   │       │   ├── bridge/         # Bridge Pattern (Abstractions & Transports)
+│   │   │       │   ├── composite/      # Composite Pattern (DownloadItem, Leaves & Groups)
+│   │   │       │   ├── flyweight/      # Flyweight Pattern (Policy Flyweight, Factory & ChunkContext)
+│   │   │       │   ├── decorator/      # Decorator Pattern (RateLimiting, Checksum, Retry, Metrics)
+│   │   │       │   ├── proxy/          # Proxy Pattern (AccessControl, Caching, LazyInit)
+│   │   │       │   └── StructuralPatternsDemo.java
+│   │   │       └── behavioral/         # GoF Behavioral Patterns Sandbox
+│   │   │           ├── chain_of_responsibility/ # Pre-flight validation pipeline handlers
+│   │   │           │   └── chain_of_responsibility.md # Architecture documentation
+│   │   │           ├── command/        # Task operations, invoker, undo/redo, batch macro
+│   │   │           │   └── command.md  # Architecture documentation
+│   │   │           ├── iterator/       # Task aggregate collection & specialized iterators
+│   │   │           │   └── iterator.md # Architecture documentation
+│   │   │           ├── mediator/       # Decoupled component coordination & event dispatch
+│   │   │           │   └── mediator.md # Architecture documentation
+│   │   │           ├── memento/        # Task checkpointing, undo/redo & state rollback
+│   │   │           │   └── memento.md  # Architecture documentation
+│   │   │           ├── observer/       # Reactive progress notifications & telemetry observers
+│   │   │           │   └── observer.md # Architecture documentation
+│   │   │           └── BehavioralPatternsDemo.java
 │   │   └── resources/
 │   │       ├── application.yaml
 │   │       └── db/changelog/           # Liquibase database migrations
 │   └── test/
-│       └── java/io/github/blueberry44477/net_retriever/patterns/creational/
-│           └── CreationalPatternsTest.java # JUnit 5 test suite (16 tests)
+│       └── java/io/github/blueberry44477/net_retriever/patterns/
+│           ├── creational/
+│           │   └── CreationalPatternsTest.java # JUnit 5 test suite (16 tests)
+│           ├── structural/
+│           │   └── StructuralPatternsTest.java # JUnit 5 test suite (41 tests)
+│           └── behavioral/
+│               └── BehavioralPatternsTest.java # JUnit 5 test suite (37 tests)
 ```
 
 ---
@@ -121,29 +179,48 @@ net-retriever/
 ## 🚀 Getting Started
 
 ### Prerequisites
-* **Java:** JDK 21 or higher
+* **Java:** JDK 21 or higher (OpenJDK 25 compatible)
 * **Maven:** Maven Wrapper (`./mvnw`) included
 
 ### Running the Creational Patterns Demonstration
-To run the interactive CLI demonstration showcasing all 6 creational patterns in action:
-
 ```bash
-# Compile the project
 ./mvnw clean compile
-
-# Execute the demo runner
 java -cp target/classes io.github.blueberry44477.net_retriever.patterns.creational.CreationalPatternsDemo
 ```
 
+### Running the Structural Patterns Demonstration
+To run the interactive CLI demonstration showcasing Adapter, Bridge, Composite, Flyweight, Decorator, and Proxy patterns:
+```bash
+./mvnw clean compile
+java -cp target/classes io.github.blueberry44477.net_retriever.patterns.structural.StructuralPatternsDemo
+```
+
+### Running the Behavioral Patterns Demonstration
+To run the interactive CLI demonstration showcasing Chain of Responsibility, Command, Iterator, Mediator, Memento, and Observer patterns:
+```bash
+./mvnw clean compile
+java -cp target/classes io.github.blueberry44477.net_retriever.patterns.behavioral.BehavioralPatternsDemo
+```
+
 ### Running Unit Tests
-A dedicated JUnit 5 suite tests identity preservation, cloning isolation, factory instantiation, builder validation, and pool exhaustion:
+Dedicated JUnit 5 suites test all creational, structural, and behavioral patterns (94 tests in total):
 
 ```bash
+# Run creational pattern tests
 ./mvnw test -Dtest=CreationalPatternsTest
+
+# Run structural pattern tests
+./mvnw test -Dtest=StructuralPatternsTest
+
+# Run behavioral pattern tests
+./mvnw test -Dtest=BehavioralPatternsTest
+
+# Run all pattern tests (94 tests)
+./mvnw test -Dtest=CreationalPatternsTest,StructuralPatternsTest,BehavioralPatternsTest
 ```
 
 ### Generating Javadoc Documentation
-All classes and interfaces include Javadoc explaining their architectural role:
+All classes, interfaces, methods, and fields include comprehensive Javadoc explaining their architectural role:
 
 ```bash
 ./mvnw javadoc:javadoc
