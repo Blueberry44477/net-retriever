@@ -40,6 +40,30 @@ import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.Downl
 import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.DownloadTaskSubject;
 import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.SpeedTelemetryObserver;
 
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.DownloadTaskStateContext;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.StateTransitionRecord;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.AdaptiveDynamicChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.BandwidthProportionalChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.ChunkPartitionSummary;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.DownloadChunkRange;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.DownloadPartitionContext;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.EqualWorkerChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.FixedSizeChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.AbstractDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.BitTorrentDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.CloudStorageDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.DownloadExecutionResult;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.HttpDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.ResumableDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.BandwidthAllocationVisitor;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.BatchDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.DownloadMetricsVisitor;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.JsonExportVisitor;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.MirroredDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.SegmentedDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.SimpleDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.StorageVerificationVisitor;
+
 /**
  * Demonstration runner showcasing GoF Behavioral Design Patterns:
  * 1. Chain of Responsibility Pattern (Sequential validation pipeline with pre-flight checks)
@@ -48,6 +72,10 @@ import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.Speed
  * 4. Mediator Pattern (Centralized coordination among downloader, storage, bandwidth QoS, and notifications)
  * 5. Memento Pattern (Non-invasive state snapshots, checkpointing, and error rollback)
  * 6. Observer Pattern (One-to-many reactive notifications: console progress, speed telemetry, audit logging, webhooks)
+ * 7. State Pattern (Encapsulated lifecycle states, transition guards, transient retry resilience)
+ * 8. Strategy Pattern (Interchangeable chunk partitioning: fixed-size, equal worker, adaptive dynamic, bandwidth proportional)
+ * 9. Template Method Pattern (Invariant download execution skeleton with protocol-specific primitive steps & hooks)
+ * 10. Visitor Pattern (Decoupled operations over hierarchical task structures via double dispatch)
  */
 public class BehavioralPatternsDemo {
 
@@ -62,6 +90,10 @@ public class BehavioralPatternsDemo {
         runMediatorDemo();
         runMementoDemo();
         runObserverDemo();
+        runStateDemo();
+        runStrategyDemo();
+        runTemplateMethodDemo();
+        runVisitorDemo();
     }
 
     /**
@@ -540,6 +572,356 @@ public class BehavioralPatternsDemo {
         System.out.printf("Total audit records captured: %d%n", auditObserver.getLogCount());
         for (int i = 0; i < auditObserver.getLogCount(); i++) {
             System.out.printf("  Record #%d: %s%n", i + 1, auditObserver.getAuditLog().get(i));
+        }
+
+        System.out.println("--------------------------------------------------------------------------------\n");
+    }
+
+    /**
+     * Demonstrates State Pattern:
+     * - Encapsulation of download lifecycle states (CREATED -> DOWNLOADING -> PAUSED -> RETRYING -> COMPLETED).
+     * - Guarding against invalid state transitions with descriptive exceptions.
+     * - Automatic resilience and recovery through the transient RETRYING state.
+     * - State transition history tracking for complete lifecycle auditability.
+     */
+    public static void runStateDemo() {
+        System.out.println("================================================================================");
+        System.out.println(">>> 7. STATE PATTERN DEMO (DOWNLOAD LIFECYCLE & TRANSIENT RETRY RESILIENCE) <<<");
+        System.out.println("================================================================================");
+
+        // Sub-demo A: Normal Lifecycle (Created -> Downloading -> Paused -> Resumed -> Completed)
+        System.out.println("\n[Sub-demo A] Standard lifecycle execution (Start -> Pause -> Resume -> Complete):");
+        DownloadTaskStateContext context = new DownloadTaskStateContext(
+                "https://releases.ubuntu.com/noble/ubuntu-24.04.iso",
+                "ubuntu-24.04.iso",
+                "/downloads/ubuntu-24.04.iso",
+                2 // max 2 retries
+        );
+        System.out.printf("Initial state: %s (isTerminal=%b, canResume=%b)%n",
+                context.getStateName(), context.isTerminal(), context.canResume());
+
+        context.start(2_000_000_000L); // 2 GB
+        System.out.printf("Active state: %s (Progress: %.1f%%)%n",
+                context.getStateName(), context.getProgressPercentage());
+
+        context.updateProgress(500_000_000L); // 500 MB
+        System.out.printf("Progress updated: %d / %d bytes (%.1f%%)%n",
+                context.getDownloadedBytes(), context.getTotalBytes(), context.getProgressPercentage());
+
+        context.pause();
+        System.out.printf("State after pause(): %s (canResume=%b)%n",
+                context.getStateName(), context.canResume());
+
+        context.resume();
+        System.out.printf("State after resume(): %s%n", context.getStateName());
+
+        context.updateProgress(2_000_000_000L);
+        context.complete();
+        System.out.printf("Final state: %s (isTerminal=%b, Progress: %.1f%%)%n",
+                context.getStateName(), context.isTerminal(), context.getProgressPercentage());
+
+        // Sub-demo B: Transient Failure with Automatic Retry Recovery
+        System.out.println("\n[Sub-demo B] Fault tolerance: Network interruption with transient RETRYING state:");
+        DownloadTaskStateContext resilientContext = new DownloadTaskStateContext(
+                "https://dl.cdn.net/archive.tar.gz",
+                "archive.tar.gz",
+                "/tmp/archive.tar.gz",
+                3
+        );
+        resilientContext.start(100_000_000L); // 100 MB
+        resilientContext.updateProgress(30_000_000L); // 30 MB
+
+        // Simulate network drop
+        resilientContext.fail("Connection reset by peer");
+        System.out.printf("State after transient failure: %s (attempts: %d/%d)%n",
+                resilientContext.getStateName(),
+                resilientContext.getCurrentRetryAttempt(),
+                resilientContext.getMaxRetries());
+
+        // Reconnect and finish
+        resilientContext.retry();
+        System.out.printf("State after retry(): %s (resumed from byte %d)%n",
+                resilientContext.getStateName(), resilientContext.getDownloadedBytes());
+        resilientContext.updateProgress(100_000_000L);
+        resilientContext.complete();
+        System.out.printf("Resilient download completed successfully! Status=%s%n", resilientContext.getStatus());
+
+        // Sub-demo C: Exhausting Retry Budget (RETRYING -> Permanent ERROR)
+        System.out.println("\n[Sub-demo C] Exhausting retry budget transitioning to permanent ERROR:");
+        DownloadTaskStateContext failingContext = new DownloadTaskStateContext(
+                "https://broken.host/file.bin",
+                "file.bin",
+                "/tmp/file.bin",
+                2
+        );
+        failingContext.start(50_000_000L);
+        failingContext.fail("HTTP 503 Service Unavailable");
+        System.out.printf("After fail #1: State=%s (attempt %d)%n",
+                failingContext.getStateName(), failingContext.getCurrentRetryAttempt());
+        failingContext.fail("HTTP 503 Service Unavailable");
+        System.out.printf("After fail #2: State=%s (attempt %d)%n",
+                failingContext.getStateName(), failingContext.getCurrentRetryAttempt());
+        failingContext.fail("HTTP 503 Service Unavailable");
+        System.out.printf("After fail #3 (budget exhausted): State=%s, Status=%s%n",
+                failingContext.getStateName(), failingContext.getStatus());
+
+        // Sub-demo D: Invalid Transition Guards
+        System.out.println("\n[Sub-demo D] Verifying state encapsulation guards against invalid operations:");
+        try {
+            context.pause(); // context is already COMPLETED
+        } catch (IllegalStateException e) {
+            System.out.printf("[Guard Triggered] Correctly rejected pause() on COMPLETED state: %s%n", e.getMessage());
+        }
+
+        // Sub-demo E: State Transition Audit History
+        System.out.println("\n[Sub-demo E] Reviewing complete state transition audit history:");
+        List<StateTransitionRecord> history = resilientContext.getTransitionHistory();
+        System.out.printf("Total transitions recorded: %d%n", history.size());
+        for (int i = 0; i < history.size(); i++) {
+            StateTransitionRecord r = history.get(i);
+            System.out.printf("  Transition #%d: %s -> %s | Reason: \"%s\"%n",
+                    i + 1, r.fromStatus(), r.toStatus(), r.reason());
+        }
+
+        System.out.println("--------------------------------------------------------------------------------\n");
+    }
+
+    /**
+     * Demonstrates Strategy Pattern:
+     * - Decoupled payload chunking algorithms (Fixed-size, Equal worker, Adaptive dynamic, Bandwidth proportional).
+     * - Runtime strategy swapping without modifying client code or partitioning invariants.
+     * - Solving the heterogeneous network worker bottleneck (proportional speed distribution).
+     * - Analytical metrics generation (load imbalance, min/max chunk size, worker allocations).
+     */
+    public static void runStrategyDemo() {
+        System.out.println("================================================================================");
+        System.out.println(">>> 8. STRATEGY PATTERN DEMO (INTERCHANGEABLE CHUNK PARTITIONING ALGORITHMS) <<<");
+        System.out.println("================================================================================");
+
+        long payloadSize = 100_000_000L; // 100 MB
+        int workerCount = 4;
+
+        // Sub-demo A: FixedSizeChunkingStrategy (20 MB chunks)
+        System.out.println("\n[Sub-demo A] Fixed-Size Chunking Strategy (20 MB fixed blocks across 4 workers):");
+        DownloadPartitionContext context = new DownloadPartitionContext(new FixedSizeChunkingStrategy(20_000_000L));
+        List<DownloadChunkRange> fixedChunks = context.executePartition(payloadSize, workerCount);
+        for (DownloadChunkRange chunk : fixedChunks) {
+            System.out.printf("  Chunk #%d: %-25s len=%10d bytes (Worker #%d)%n",
+                    chunk.chunkIndex(), chunk.toHttpRangeHeader(), chunk.length(), chunk.assignedWorkerId());
+        }
+        ChunkPartitionSummary fixedSummary = context.getPartitionSummary(fixedChunks);
+        System.out.printf("  Summary: %d chunks, Imbalance ratio: %.2f%n",
+                fixedSummary.totalChunks(), fixedSummary.loadImbalanceRatio());
+
+        // Sub-demo B: EqualWorkerChunkingStrategy (Perfect 1-byte balanced distribution)
+        System.out.println("\n[Sub-demo B] Switching to Equal-Worker Chunking Strategy (100 MB / 4 workers):");
+        context.setStrategy(new EqualWorkerChunkingStrategy());
+        List<DownloadChunkRange> equalChunks = context.executePartition(payloadSize, workerCount);
+        for (DownloadChunkRange chunk : equalChunks) {
+            System.out.printf("  Chunk #%d: %-25s len=%10d bytes (Worker #%d)%n",
+                    chunk.chunkIndex(), chunk.toHttpRangeHeader(), chunk.length(), chunk.assignedWorkerId());
+        }
+        ChunkPartitionSummary equalSummary = context.getPartitionSummary(equalChunks);
+        System.out.printf("  Summary: %d chunks, Imbalance ratio: %.2f (Perfect parity)%n",
+                equalSummary.totalChunks(), equalSummary.loadImbalanceRatio());
+
+        // Sub-demo C: AdaptiveDynamicChunkingStrategy (Size-tiered adaptation)
+        System.out.println("\n[Sub-demo C] Switching to Adaptive Dynamic Strategy across different payload sizes:");
+        context.setStrategy(new AdaptiveDynamicChunkingStrategy());
+
+        // Small file: 2 MB -> 1 chunk (no socket overhead)
+        List<DownloadChunkRange> smallChunks = context.executePartition(2_000_000L, 8);
+        System.out.printf("  Small file (2 MB):  %d chunk(s) generated -> %s%n",
+                smallChunks.size(), smallChunks.getFirst().toHttpRangeHeader());
+
+        // Medium file: 25 MB -> 4 chunks
+        List<DownloadChunkRange> medChunks = context.executePartition(25_000_000L, 8);
+        System.out.printf("  Medium file (25 MB): %d chunks generated across workers%n", medChunks.size());
+
+        // Large file: 800 MB -> 16 chunks
+        List<DownloadChunkRange> hugeChunks = context.executePartition(800_000_000L, 16);
+        System.out.printf("  Huge file (800 MB):  %d chunks generated across 16 workers%n", hugeChunks.size());
+
+        // Sub-demo D: BandwidthProportionalChunkingStrategy (Heterogeneous worker speeds)
+        System.out.println("\n[Sub-demo D] Bandwidth Proportional Strategy (Heterogeneous mirror speeds):");
+        // Worker 0 = 100 MB/s (Fiber), Worker 1 = 50 MB/s (Cable), Worker 2 = 25 MB/s (DSL), Worker 3 = 25 MB/s (DSL)
+        List<Double> mirrorSpeeds = List.of(100.0, 50.0, 25.0, 25.0); // Ratio: 50%, 25%, 12.5%, 12.5%
+        context.setStrategy(new BandwidthProportionalChunkingStrategy(mirrorSpeeds));
+        List<DownloadChunkRange> propChunks = context.executePartition(payloadSize, 4);
+
+        for (DownloadChunkRange chunk : propChunks) {
+            double pct = ((double) chunk.length() / payloadSize) * 100.0;
+            System.out.printf("  Worker #%d (Speed: %5.1f MB/s): %-25s len=%9d B (%4.1f%%)%n",
+                    chunk.assignedWorkerId(),
+                    mirrorSpeeds.get(chunk.assignedWorkerId()),
+                    chunk.toHttpRangeHeader(),
+                    chunk.length(),
+                    pct);
+        }
+
+        ChunkPartitionSummary propSummary = context.getPartitionSummary(propChunks);
+        System.out.printf("  Total covered: %d bytes (100%% contiguous, 0 lost bytes)%n", propSummary.totalBytes());
+
+        System.out.println("--------------------------------------------------------------------------------\n");
+    }
+
+    /**
+     * Demonstrates Template Method Pattern:
+     * - Fixed algorithm skeleton enforced by AbstractDownloadWorkflow.executeDownload() (final).
+     * - Protocol-specific primitive steps (HTTP single-stream, HTTP resumable Range, BitTorrent swarm, Cloud S3).
+     * - Hook methods: optional pre-download resume checks, sparse storage pre-allocation, integrity hashing, post-processing.
+     * - Guaranteed resource cleanup in finally block.
+     */
+    public static void runTemplateMethodDemo() {
+        System.out.println("================================================================================");
+        System.out.println(">>> 9. TEMPLATE METHOD PATTERN DEMO (INVARIANT WORKFLOW SKELETON & HOOKS) <<<");
+        System.out.println("================================================================================");
+
+        // Sub-demo A: Standard HTTP Workflow
+        System.out.println("\n[Sub-demo A] Standard single-stream HTTP download workflow:");
+        AbstractDownloadWorkflow httpWorkflow = new HttpDownloadWorkflow();
+        DownloadExecutionResult httpResult = httpWorkflow.executeDownload(
+                "https://releases.ubuntu.com/noble/SHA256SUMS",
+                "/downloads/SHA256SUMS"
+        );
+        System.out.printf("Result: success=%b, transferred=%d bytes, checksum=%s%n",
+                httpResult.success(), httpResult.bytesTransferred(), httpResult.checksum());
+        System.out.println("Step trace:");
+        for (String step : httpResult.executionSteps()) {
+            System.out.println("  -> " + step);
+        }
+
+        // Sub-demo B: Resumable HTTP Range Workflow
+        System.out.println("\n[Sub-demo B] Resumable HTTP Range download workflow (40 MB partial file already present):");
+        AbstractDownloadWorkflow resumableWorkflow = new ResumableDownloadWorkflow(40_000_000L); // 40 MB already downloaded
+        DownloadExecutionResult resumeResult = resumableWorkflow.executeDownload(
+                "https://cdn.example.org/large-dataset.tar.gz",
+                "/downloads/large-dataset.tar.gz"
+        );
+        System.out.printf("Result: success=%b, total=%d bytes, transferred=%d bytes (only missing delta!)%n",
+                resumeResult.success(), resumeResult.totalBytes(), resumeResult.bytesTransferred());
+
+        // Sub-demo C: BitTorrent Workflow (Sparse File Pre-allocation Hook)
+        System.out.println("\n[Sub-demo C] BitTorrent swarm workflow (Sparse storage pre-allocation & info-hash check):");
+        AbstractDownloadWorkflow torrentWorkflow = new BitTorrentDownloadWorkflow(128);
+        DownloadExecutionResult torrentResult = torrentWorkflow.executeDownload(
+                "magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709&dn=ubuntu-24.04.iso",
+                "/downloads/ubuntu-24.04.iso"
+        );
+        System.out.printf("Result: success=%b, transferred=%d bytes, infoHash=%s%n",
+                torrentResult.success(), torrentResult.bytesTransferred(), torrentResult.checksum());
+
+        // Sub-demo D: Cloud S3 Multipart Workflow
+        System.out.println("\n[Sub-demo D] Cloud Object Storage workflow (IAM SigV4 auth & multipart ETag check):");
+        AbstractDownloadWorkflow cloudWorkflow = new CloudStorageDownloadWorkflow("production-assets-bucket");
+        DownloadExecutionResult cloudResult = cloudWorkflow.executeDownload(
+                "s3://production-assets-bucket/backups/db-backup-2026.sql.zst",
+                "/downloads/db-backup.sql.zst"
+        );
+        System.out.printf("Result: success=%b, transferred=%d bytes, ETag=%s%n",
+                cloudResult.success(), cloudResult.bytesTransferred(), cloudResult.checksum());
+
+        // Sub-demo E: Error Handling & Guaranteed Cleanup on Invalid URL
+        System.out.println("\n[Sub-demo E] Fault handling: Invalid scheme triggers safe cleanup in template method:");
+        DownloadExecutionResult failResult = httpWorkflow.executeDownload("invalid-uri-no-scheme", "/tmp/err");
+        System.out.printf("Result: success=%b, error=\"%s\"%n", failResult.success(), failResult.errorMessage());
+
+        System.out.println("--------------------------------------------------------------------------------\n");
+    }
+
+    /**
+     * Demonstrates Visitor Pattern:
+     * - Double dispatch mechanism over heterogeneous task structures.
+     * - DownloadMetricsVisitor: aggregated bytes, leaf counts, chunks, mirrors, and percentage.
+     * - StorageVerificationVisitor: disk space projection, dangerous extension detection, duplicate file check.
+     * - JsonExportVisitor: pretty-printed JSON serialization of the task hierarchy.
+     * - BandwidthAllocationVisitor: QoS proportional bandwidth partitioning based on active connections.
+     */
+    public static void runVisitorDemo() {
+        System.out.println("================================================================================");
+        System.out.println(">>> 10. VISITOR PATTERN DEMO (DECOUPLED OPERATIONS OVER TASK HIERARCHIES) <<<");
+        System.out.println("================================================================================");
+
+        // Construct composite download hierarchy
+        BatchDownloadElement rootBatch = new BatchDownloadElement("Release-Bundle-v2.0");
+
+        SimpleDownloadElement simpleFile = new SimpleDownloadElement(
+                "release-notes.txt", "https://cdn.example.org/release-notes.txt",
+                20_000L, 20_000L, "text/plain", "sha256:abc123notes"
+        );
+
+        SegmentedDownloadElement segmentedFile = new SegmentedDownloadElement(
+                "application-server.tar.gz", "https://cdn.example.org/application-server.tar.gz",
+                500_000_000L, 250_000_000L, 8, 4 // 8 chunks, 4 connections
+        );
+
+        MirroredDownloadElement mirroredFile = new MirroredDownloadElement(
+                "database-dump.sql.zst", "https://us-east.mirror.org/db.sql.zst",
+                List.of("https://eu-west.mirror.org/db.sql.zst", "https://ap-south.mirror.org/db.sql.zst"),
+                1_000_000_000L, 400_000_000L
+        );
+
+        BatchDownloadElement subBatch = new BatchDownloadElement("Tools-And-Utilities");
+        subBatch.addElement(new SimpleDownloadElement(
+                "updater-patch.bin", "https://cdn.example.org/updater-patch.bin",
+                50_000_000L, 10_000_000L, "application/octet-stream", "sha256:patch789"
+        ));
+        subBatch.addElement(new SimpleDownloadElement(
+                "install-script.sh", "http://insecure.internal/install-script.sh", // Insecure HTTP & .sh extension
+                15_000L, 0L, "text/x-shellscript", "sha256:script456"
+        ));
+
+        rootBatch.addElement(simpleFile);
+        rootBatch.addElement(segmentedFile);
+        rootBatch.addElement(mirroredFile);
+        rootBatch.addElement(subBatch);
+
+        // Sub-demo A: DownloadMetricsVisitor
+        System.out.println("\n[Sub-demo A] DownloadMetricsVisitor: Calculating aggregated telemetry across hierarchy:");
+        DownloadMetricsVisitor metricsVisitor = new DownloadMetricsVisitor();
+        rootBatch.accept(metricsVisitor);
+        System.out.printf("  Total Files:       %d%n", metricsVisitor.getTotalFilesCount());
+        System.out.printf("  Total Batches:     %d%n", metricsVisitor.getTotalBatchesCount());
+        System.out.printf("  Total Segments:    %d%n", metricsVisitor.getTotalSegmentsCount());
+        System.out.printf("  Total Mirrors:     %d%n", metricsVisitor.getTotalMirrorsCount());
+        System.out.printf("  Total Bytes:       %d bytes (%.2f MB)%n",
+                metricsVisitor.getAggregatedTotalBytes(),
+                metricsVisitor.getAggregatedTotalBytes() / (1024.0 * 1024.0));
+        System.out.printf("  Downloaded Bytes:  %d bytes (%.2f MB)%n",
+                metricsVisitor.getAggregatedDownloadedBytes(),
+                metricsVisitor.getAggregatedDownloadedBytes() / (1024.0 * 1024.0));
+        System.out.printf("  Overall Progress:  %.2f%%%n", metricsVisitor.getOverallProgressPercentage());
+
+        // Sub-demo B: StorageVerificationVisitor
+        System.out.println("\n[Sub-demo B] StorageVerificationVisitor: Auditing remaining disk space & security policies:");
+        StorageVerificationVisitor storageVisitor = new StorageVerificationVisitor();
+        rootBatch.accept(storageVisitor);
+        System.out.printf("  Remaining disk space required: %d bytes (%.2f MB)%n",
+                storageVisitor.getRequiredRemainingDiskBytes(),
+                storageVisitor.getRequiredRemainingDiskBytes() / (1024.0 * 1024.0));
+        System.out.printf("  Security Policy Passed:        %b%n", storageVisitor.isApproved());
+        System.out.printf("  Warnings recorded:             %d%n", storageVisitor.getWarnings().size());
+        for (String warning : storageVisitor.getWarnings()) {
+            System.out.println("    [WARNING] " + warning);
+        }
+
+        // Sub-demo C: JsonExportVisitor
+        System.out.println("\n[Sub-demo C] JsonExportVisitor: Serializing entire download tree into JSON:");
+        JsonExportVisitor jsonVisitor = new JsonExportVisitor();
+        rootBatch.accept(jsonVisitor);
+        System.out.println(jsonVisitor.getJsonOutput());
+
+        // Sub-demo D: BandwidthAllocationVisitor
+        System.out.println("\n[Sub-demo D] BandwidthAllocationVisitor: Allocating 100 MB/s QoS pool across elements:");
+        BandwidthAllocationVisitor bandwidthVisitor = new BandwidthAllocationVisitor(100_000_000L); // 100 MB/s
+        rootBatch.accept(bandwidthVisitor);
+        var allocations = bandwidthVisitor.computeAllocations();
+        System.out.printf("  Total bandwidth pool: %d B/s (%.1f MB/s)%n",
+                bandwidthVisitor.getTotalBandwidthPoolBytesPerSec(),
+                bandwidthVisitor.getTotalBandwidthPoolBytesPerSec() / (1024.0 * 1024.0));
+        for (var entry : allocations.entrySet()) {
+            System.out.printf("  Element ID [%-36s]: %10d B/s (%5.2f MB/s)%n",
+                    entry.getKey(), entry.getValue(), entry.getValue() / (1024.0 * 1024.0));
         }
 
         System.out.println("--------------------------------------------------------------------------------");

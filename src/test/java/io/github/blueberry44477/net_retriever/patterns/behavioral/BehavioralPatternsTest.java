@@ -58,6 +58,41 @@ import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.Downl
 import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.DownloadProgressEvent;
 import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.DownloadTaskSubject;
 import io.github.blueberry44477.net_retriever.patterns.behavioral.observer.SpeedTelemetryObserver;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.CanceledDownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.CompletedDownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.CreatedDownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.DownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.DownloadTaskStateContext;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.DownloadingDownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.ErrorDownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.PausedDownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.RetryingDownloadState;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.state.StateTransitionRecord;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.AdaptiveDynamicChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.BandwidthProportionalChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.ChunkPartitionSummary;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.ChunkPartitioningStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.DownloadChunkRange;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.DownloadPartitionContext;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.EqualWorkerChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.strategy.FixedSizeChunkingStrategy;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.AbstractDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.BitTorrentDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.CloudStorageDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.DownloadExecutionResult;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.HttpDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.template_method.ResumableDownloadWorkflow;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.BandwidthAllocationVisitor;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.BatchDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.DownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.DownloadMetricsVisitor;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.DownloadVisitor;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.JsonExportVisitor;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.MirroredDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.SegmentedDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.SimpleDownloadElement;
+import io.github.blueberry44477.net_retriever.patterns.behavioral.visitor.StorageVerificationVisitor;
+import java.io.IOException;
 import java.util.Optional;
 import java.util.Set;
 
@@ -1074,6 +1109,909 @@ class BehavioralPatternsTest {
             subject.updateProgress(500L, 50L);
 
             assertEquals(2, healthyObserver.getLogCount());
+        }
+    }
+
+    @Nested
+    @DisplayName("State Pattern Tests")
+    class StatePatternTests {
+
+        @Test
+        @DisplayName("Newly created context initializes in CREATED state with valid defaults")
+        void testInitialCreatedState() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/file.zip", "file.zip", "/downloads/file.zip", 3
+            );
+
+            assertEquals(DownloadStatus.CREATED, context.getStatus());
+            assertEquals("CREATED", context.getStateName());
+            assertFalse(context.isTerminal());
+            assertFalse(context.canResume());
+            assertTrue(context.canRetry());
+            assertEquals(0L, context.getDownloadedBytes());
+            assertEquals(0L, context.getTotalBytes());
+            assertEquals(0.0, context.getProgressPercentage());
+            assertTrue(context.getState() instanceof CreatedDownloadState);
+        }
+
+        @Test
+        @DisplayName("Starting from CREATED transitions cleanly to DOWNLOADING")
+        void testStartFromCreated() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/file.zip", "file.zip", "/downloads/file.zip"
+            );
+
+            context.start(1000L);
+
+            assertEquals(DownloadStatus.DOWNLOADING, context.getStatus());
+            assertEquals("DOWNLOADING", context.getStateName());
+            assertEquals(1000L, context.getTotalBytes());
+            assertEquals(0L, context.getDownloadedBytes());
+            assertTrue(context.getState() instanceof DownloadingDownloadState);
+
+            List<StateTransitionRecord> history = context.getTransitionHistory();
+            assertEquals(1, history.size());
+            assertEquals(DownloadStatus.CREATED, history.getFirst().fromStatus());
+            assertEquals(DownloadStatus.DOWNLOADING, history.getFirst().toStatus());
+        }
+
+        @Test
+        @DisplayName("Calling invalid operations from CREATED state throws IllegalStateException")
+        void testCreatedStateGuards() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/file.zip", "file.zip", "/downloads/file.zip"
+            );
+
+            assertThrows(IllegalStateException.class, () -> context.updateProgress(100L));
+            assertThrows(IllegalStateException.class, context::pause);
+            assertThrows(IllegalStateException.class, context::resume);
+            assertThrows(IllegalStateException.class, context::complete);
+            assertThrows(IllegalStateException.class, context::retry);
+            assertThrows(IllegalArgumentException.class, () -> context.start(0L));
+        }
+
+        @Test
+        @DisplayName("Full normal lifecycle transitions: CREATED -> DOWNLOADING -> PAUSED -> RESUMED -> COMPLETED")
+        void testNormalLifecycleFlow() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/video.mp4", "video.mp4", "/downloads"
+            );
+
+            context.start(2000L);
+            assertEquals(DownloadStatus.DOWNLOADING, context.getStatus());
+
+            context.updateProgress(500L);
+            assertEquals(500L, context.getDownloadedBytes());
+            assertEquals(25.0, context.getProgressPercentage());
+
+            context.pause();
+            assertEquals(DownloadStatus.PAUSED, context.getStatus());
+            assertTrue(context.canResume());
+            assertFalse(context.isTerminal());
+            assertTrue(context.getState() instanceof PausedDownloadState);
+
+            // Resuming
+            context.resume();
+            assertEquals(DownloadStatus.DOWNLOADING, context.getStatus());
+            assertEquals(500L, context.getDownloadedBytes());
+
+            // Complete
+            context.updateProgress(2000L);
+            assertEquals(100.0, context.getProgressPercentage());
+            context.complete();
+
+            assertEquals(DownloadStatus.COMPLETED, context.getStatus());
+            assertTrue(context.isTerminal());
+            assertFalse(context.canResume());
+            assertTrue(context.getState() instanceof CompletedDownloadState);
+        }
+
+        @Test
+        @DisplayName("Byte progress update enforces non-regression and total byte limits")
+        void testProgressUpdateValidations() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/data.bin", "data.bin", "/tmp"
+            );
+            context.start(1000L);
+            context.updateProgress(400L);
+
+            // Regression is rejected
+            assertThrows(IllegalArgumentException.class, () -> context.updateProgress(350L));
+
+            // Exceeding totalBytes is rejected
+            assertThrows(IllegalArgumentException.class, () -> context.updateProgress(1001L));
+
+            // Valid progress continues
+            context.updateProgress(600L);
+            assertEquals(600L, context.getDownloadedBytes());
+        }
+
+        @Test
+        @DisplayName("Transient network failure enters RETRYING state and recovers seamlessly via retry()")
+        void testTransientFailureWithRetryRecovery() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/archive.tar", "archive.tar", "/tmp", 3
+            );
+            context.start(10000L);
+            context.updateProgress(4000L);
+
+            context.fail("Connection reset by peer");
+
+            // Status is DOWNLOADING (in retry backoff) and state name is RETRYING
+            assertEquals(DownloadStatus.DOWNLOADING, context.getStatus());
+            assertEquals("RETRYING", context.getStateName());
+            assertTrue(context.canResume());
+            assertFalse(context.isTerminal());
+            assertTrue(context.getState() instanceof RetryingDownloadState);
+
+            // Reconnecting via retry()
+            context.retry();
+            assertEquals("DOWNLOADING", context.getStateName());
+            assertEquals(4000L, context.getDownloadedBytes());
+
+            context.updateProgress(10000L);
+            context.complete();
+            assertEquals(DownloadStatus.COMPLETED, context.getStatus());
+        }
+
+        @Test
+        @DisplayName("Exhausting retry attempts transitions permanently to ERROR state")
+        void testRetryBudgetExhaustion() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://broken.server/file", "file", "/tmp", 2 // max 2 retries
+            );
+            context.start(5000L);
+
+            // Fail 1: retrying (attempt 1/2)
+            context.fail("Timeout 1");
+            assertEquals("RETRYING", context.getStateName());
+
+            // Fail 2: retrying (attempt 2/2)
+            context.fail("Timeout 2");
+            assertEquals("RETRYING", context.getStateName());
+
+            // Fail 3: budget exhausted -> permanent ERROR
+            context.fail("Timeout 3");
+            assertEquals(DownloadStatus.ERROR, context.getStatus());
+            assertEquals("ERROR", context.getStateName());
+            assertFalse(context.isTerminal()); // Error is recoverable via restart
+            assertTrue(context.getState() instanceof ErrorDownloadState);
+        }
+
+        @Test
+        @DisplayName("Failed download in ERROR state can be restarted fresh or retried")
+        void testErrorRecoveryViaRestartAndRetry() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/app.dmg", "app.dmg", "/tmp", 0 // 0 retries
+            );
+            context.start(1000L);
+            context.fail("Fatal I/O Error");
+
+            assertEquals(DownloadStatus.ERROR, context.getStatus());
+
+            // Recovery 1: retry from current bytes
+            context.retry();
+            assertEquals(DownloadStatus.DOWNLOADING, context.getStatus());
+
+            // Re-fail
+            context.fail("Second failure");
+            assertEquals(DownloadStatus.ERROR, context.getStatus());
+
+            // Recovery 2: start from beginning with new size
+            context.start(2000L);
+            assertEquals(DownloadStatus.DOWNLOADING, context.getStatus());
+            assertEquals(0L, context.getDownloadedBytes());
+            assertEquals(2000L, context.getTotalBytes());
+        }
+
+        @Test
+        @DisplayName("Task cancellation from CREATED, DOWNLOADING, and PAUSED transitions to CANCELED")
+        void testCancellationScenarios() {
+            // Cancel from CREATED
+            DownloadTaskStateContext c1 = new DownloadTaskStateContext("https://a.com/1", "1", "/tmp");
+            c1.cancel();
+            assertEquals(DownloadStatus.CANCELED, c1.getStatus());
+            assertTrue(c1.isTerminal());
+
+            // Cancel from DOWNLOADING
+            DownloadTaskStateContext c2 = new DownloadTaskStateContext("https://a.com/2", "2", "/tmp");
+            c2.start(500L);
+            c2.cancel();
+            assertEquals(DownloadStatus.CANCELED, c2.getStatus());
+            assertTrue(c2.isTerminal());
+
+            // Cancel from PAUSED
+            DownloadTaskStateContext c3 = new DownloadTaskStateContext("https://a.com/3", "3", "/tmp");
+            c3.start(500L);
+            c3.pause();
+            c3.cancel();
+            assertEquals(DownloadStatus.CANCELED, c3.getStatus());
+            assertTrue(c3.isTerminal());
+        }
+
+        @Test
+        @DisplayName("Terminal states (COMPLETED, CANCELED) strictly forbid any further lifecycle operations")
+        void testTerminalStateGuards() {
+            DownloadTaskStateContext completed = new DownloadTaskStateContext("https://a.com/c", "c", "/tmp");
+            completed.start(100L);
+            completed.complete();
+
+            assertThrows(IllegalStateException.class, () -> completed.start(100L));
+            assertThrows(IllegalStateException.class, () -> completed.updateProgress(50L));
+            assertThrows(IllegalStateException.class, completed::pause);
+            assertThrows(IllegalStateException.class, completed::resume);
+            assertThrows(IllegalStateException.class, completed::complete);
+            assertThrows(IllegalStateException.class, completed::cancel);
+            assertThrows(IllegalStateException.class, () -> completed.fail("err"));
+            assertThrows(IllegalStateException.class, completed::retry);
+
+            DownloadTaskStateContext canceled = new DownloadTaskStateContext("https://a.com/x", "x", "/tmp");
+            canceled.cancel();
+
+            assertThrows(IllegalStateException.class, () -> canceled.start(100L));
+            assertThrows(IllegalStateException.class, () -> canceled.updateProgress(50L));
+            assertThrows(IllegalStateException.class, canceled::pause);
+            assertThrows(IllegalStateException.class, canceled::resume);
+            assertThrows(IllegalStateException.class, canceled::complete);
+            assertThrows(IllegalStateException.class, canceled::cancel);
+            assertThrows(IllegalStateException.class, () -> canceled.fail("err"));
+            assertThrows(IllegalStateException.class, canceled::retry);
+        }
+
+        @Test
+        @DisplayName("StateTransitionRecord captures full chronological audit log of lifecycle events")
+        void testStateTransitionAuditHistory() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext("https://a.com/log", "log.bin", "/tmp");
+            context.start(1000L);
+            context.pause();
+            context.resume();
+            context.complete();
+
+            List<StateTransitionRecord> history = context.getTransitionHistory();
+            assertEquals(4, history.size());
+
+            assertEquals(DownloadStatus.CREATED, history.get(0).fromStatus());
+            assertEquals(DownloadStatus.DOWNLOADING, history.get(0).toStatus());
+
+            assertEquals(DownloadStatus.DOWNLOADING, history.get(1).fromStatus());
+            assertEquals(DownloadStatus.PAUSED, history.get(1).toStatus());
+
+            assertEquals(DownloadStatus.PAUSED, history.get(2).fromStatus());
+            assertEquals(DownloadStatus.DOWNLOADING, history.get(2).toStatus());
+
+            assertEquals(DownloadStatus.DOWNLOADING, history.get(3).fromStatus());
+            assertEquals(DownloadStatus.COMPLETED, history.get(3).toStatus());
+
+            for (StateTransitionRecord r : history) {
+                assertNotNull(r.timestamp());
+                assertNotNull(r.reason());
+            }
+        }
+
+        @Test
+        @DisplayName("toDownloadTask converts state context to matching domain DownloadTask entity")
+        void testToDownloadTaskConversion() {
+            DownloadTaskStateContext context = new DownloadTaskStateContext(
+                    "https://example.com/entity.iso", "entity.iso", "/downloads/entity.iso"
+            );
+            context.start(5000L);
+            context.updateProgress(2500L);
+            context.pause();
+
+            var task = context.toDownloadTask();
+            assertEquals("https://example.com/entity.iso", task.getUrl());
+            assertEquals("entity.iso", task.getFileName());
+            assertEquals(5000L, task.getTotalBytes());
+            assertEquals(2500L, task.getDownloadedBytes());
+            assertEquals(DownloadStatus.PAUSED, task.getStatus());
+        }
+    }
+
+    @Nested
+    @DisplayName("Strategy Pattern Tests")
+    class StrategyPatternTests {
+
+        @Test
+        @DisplayName("DownloadChunkRange validates bounds, checks containment, overlap, adjacency and HTTP Range")
+        void testDownloadChunkRangeValidation() {
+            DownloadChunkRange chunk0 = DownloadChunkRange.of(0, 0, 999, 0);
+            DownloadChunkRange chunk1 = DownloadChunkRange.of(1, 1000, 1999, 1);
+            DownloadChunkRange chunkOverlap = DownloadChunkRange.of(2, 500, 1500, 2);
+
+            assertEquals(1000L, chunk0.length());
+            assertEquals("bytes=0-999", chunk0.toHttpRangeHeader());
+            assertEquals("bytes=1000-1999", chunk1.toHttpRangeHeader());
+
+            assertTrue(chunk0.contains(0));
+            assertTrue(chunk0.contains(500));
+            assertTrue(chunk0.contains(999));
+            assertFalse(chunk0.contains(1000));
+
+            assertTrue(chunk0.isAdjacent(chunk1));
+            assertFalse(chunk0.overlaps(chunk1));
+
+            assertTrue(chunk0.overlaps(chunkOverlap));
+            assertTrue(chunk1.overlaps(chunkOverlap));
+
+            assertThrows(IllegalArgumentException.class, () -> new DownloadChunkRange(-1, 0, 10, 11, 0));
+            assertThrows(IllegalArgumentException.class, () -> new DownloadChunkRange(0, -1, 10, 12, 0));
+            assertThrows(IllegalArgumentException.class, () -> new DownloadChunkRange(0, 10, 5, 0, 0));
+            assertThrows(IllegalArgumentException.class, () -> new DownloadChunkRange(0, 0, 10, 999, 0)); // wrong length
+        }
+
+        @Test
+        @DisplayName("FixedSizeChunkingStrategy divides payload evenly when total is a multiple of chunk size")
+        void testFixedSizeChunkingStrategyDivisible() {
+            ChunkPartitioningStrategy strategy = new FixedSizeChunkingStrategy(2_000_000L); // 2 MB
+            DownloadPartitionContext context = new DownloadPartitionContext(strategy);
+
+            List<DownloadChunkRange> chunks = context.executePartition(10_000_000L, 4); // 10 MB across 4 workers
+
+            assertEquals(5, chunks.size());
+            for (DownloadChunkRange c : chunks) {
+                assertEquals(2_000_000L, c.length());
+            }
+
+            // Verify round robin worker assignment
+            assertEquals(0, chunks.get(0).assignedWorkerId());
+            assertEquals(1, chunks.get(1).assignedWorkerId());
+            assertEquals(2, chunks.get(2).assignedWorkerId());
+            assertEquals(3, chunks.get(3).assignedWorkerId());
+            assertEquals(0, chunks.get(4).assignedWorkerId());
+        }
+
+        @Test
+        @DisplayName("FixedSizeChunkingStrategy assigns remainder to last chunk when not evenly divisible")
+        void testFixedSizeChunkingStrategyWithRemainder() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new FixedSizeChunkingStrategy(3_000_000L));
+
+            List<DownloadChunkRange> chunks = context.executePartition(10_000_000L, 2); // 10 MB / 3 MB = 3 full + 1 remainder
+
+            assertEquals(4, chunks.size());
+            assertEquals(3_000_000L, chunks.get(0).length());
+            assertEquals(3_000_000L, chunks.get(1).length());
+            assertEquals(3_000_000L, chunks.get(2).length());
+            assertEquals(1_000_000L, chunks.get(3).length());
+            assertEquals(9_999_999L, chunks.get(3).endByte());
+        }
+
+        @Test
+        @DisplayName("FixedSizeChunkingStrategy produces single chunk if payload size is smaller than chunk size")
+        void testFixedSizeChunkingFileSmallerThanChunk() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new FixedSizeChunkingStrategy(5_000_000L));
+            List<DownloadChunkRange> chunks = context.executePartition(1_000_000L, 4);
+
+            assertEquals(1, chunks.size());
+            assertEquals(0L, chunks.getFirst().startByte());
+            assertEquals(999_999L, chunks.getFirst().endByte());
+            assertEquals(1_000_000L, chunks.getFirst().length());
+        }
+
+        @Test
+        @DisplayName("EqualWorkerChunkingStrategy produces exact worker count with 1-byte balanced distribution")
+        void testEqualWorkerChunkingStrategy() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new EqualWorkerChunkingStrategy());
+
+            // 10 bytes across 3 workers -> 4, 3, 3 bytes
+            List<DownloadChunkRange> chunks = context.executePartition(10L, 3);
+            assertEquals(3, chunks.size());
+            assertEquals(4L, chunks.get(0).length());
+            assertEquals(3L, chunks.get(1).length());
+            assertEquals(3L, chunks.get(2).length());
+
+            assertEquals(0, chunks.get(0).assignedWorkerId());
+            assertEquals(1, chunks.get(1).assignedWorkerId());
+            assertEquals(2, chunks.get(2).assignedWorkerId());
+
+            // 100 MB across 4 workers -> 25 MB each
+            List<DownloadChunkRange> largeChunks = context.executePartition(100_000_000L, 4);
+            assertEquals(4, largeChunks.size());
+            for (DownloadChunkRange c : largeChunks) {
+                assertEquals(25_000_000L, c.length());
+            }
+        }
+
+        @Test
+        @DisplayName("EqualWorkerChunkingStrategy clamps workers when totalBytes is less than worker count")
+        void testEqualWorkerChunkingWorkerCountExceedsBytes() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new EqualWorkerChunkingStrategy());
+            List<DownloadChunkRange> chunks = context.executePartition(3L, 10);
+
+            assertEquals(3, chunks.size());
+            for (int i = 0; i < 3; i++) {
+                assertEquals(1L, chunks.get(i).length());
+                assertEquals(i, chunks.get(i).assignedWorkerId());
+            }
+        }
+
+        @Test
+        @DisplayName("AdaptiveDynamicChunkingStrategy automatically adapts chunk count based on size tiers")
+        void testAdaptiveDynamicChunkingTiers() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new AdaptiveDynamicChunkingStrategy());
+
+            // Tier 1: Small (< 5 MB) -> 1 chunk
+            List<DownloadChunkRange> small = context.executePartition(2_000_000L, 8);
+            assertEquals(1, small.size());
+
+            // Tier 2: Medium (5 MB - 50 MB) -> 4 chunks
+            List<DownloadChunkRange> medium = context.executePartition(20_000_000L, 8);
+            assertEquals(4, medium.size());
+
+            // Tier 3: Large (50 MB - 500 MB) -> 8 chunks
+            List<DownloadChunkRange> large = context.executePartition(200_000_000L, 16);
+            assertEquals(8, large.size());
+
+            // Tier 4: Huge (>= 500 MB) -> 16 chunks
+            List<DownloadChunkRange> huge = context.executePartition(1_000_000_000L, 32);
+            assertEquals(16, huge.size());
+        }
+
+        @Test
+        @DisplayName("BandwidthProportionalChunkingStrategy divides chunks proportionally to worker speeds")
+        void testBandwidthProportionalChunkingStrategy() {
+            // Worker 0: 3x speed, Worker 1: 1x speed (Total: 4 parts, 75% and 25%)
+            DownloadPartitionContext context = new DownloadPartitionContext(
+                    new BandwidthProportionalChunkingStrategy(List.of(3.0, 1.0))
+            );
+
+            List<DownloadChunkRange> chunks = context.executePartition(100_000_000L, 2);
+            assertEquals(2, chunks.size());
+
+            assertEquals(75_000_000L, chunks.get(0).length());
+            assertEquals(0L, chunks.get(0).startByte());
+            assertEquals(74_999_999L, chunks.get(0).endByte());
+
+            assertEquals(25_000_000L, chunks.get(1).length());
+            assertEquals(75_000_000L, chunks.get(1).startByte());
+            assertEquals(99_999_999L, chunks.get(1).endByte());
+
+            // 4 workers with speeds: 100, 50, 25, 25
+            context.setStrategy(new BandwidthProportionalChunkingStrategy(List.of(100.0, 50.0, 25.0, 25.0)));
+            List<DownloadChunkRange> prop4 = context.executePartition(100_000_000L, 4);
+            assertEquals(4, prop4.size());
+            assertEquals(50_000_000L, prop4.get(0).length());
+            assertEquals(25_000_000L, prop4.get(1).length());
+            assertEquals(12_500_000L, prop4.get(2).length());
+            assertEquals(12_500_000L, prop4.get(3).length());
+        }
+
+        @Test
+        @DisplayName("DownloadPartitionContext supports dynamic runtime strategy switching")
+        void testRuntimeStrategySwitching() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new FixedSizeChunkingStrategy(50_000_000L));
+            assertEquals("FixedSizeChunkingStrategy", context.getStrategy().getStrategyName());
+
+            List<DownloadChunkRange> fixed = context.executePartition(100_000_000L, 2);
+            assertEquals(2, fixed.size());
+
+            // Switch to equal worker
+            context.setStrategy(new EqualWorkerChunkingStrategy());
+            assertEquals("EqualWorkerChunkingStrategy", context.getStrategy().getStrategyName());
+
+            List<DownloadChunkRange> equal = context.executePartition(100_000_000L, 5);
+            assertEquals(5, equal.size());
+        }
+
+        @Test
+        @DisplayName("DownloadPartitionContext detects and rejects faulty strategies violating invariants")
+        void testPartitionInvariantsEnforcement() {
+            // Faulty strategy with a gap
+            ChunkPartitioningStrategy gapStrategy = new ChunkPartitioningStrategy() {
+                @Override
+                public List<DownloadChunkRange> partition(long totalBytes, int maxWorkers) {
+                    return List.of(
+                            DownloadChunkRange.of(0, 0, 400, 0),
+                            DownloadChunkRange.of(1, 500, 999, 1) // Gap: 401-499 missing!
+                    );
+                }
+
+                @Override
+                public String getStrategyName() {
+                    return "GapStrategy";
+                }
+
+                @Override
+                public String getDescription() {
+                    return "Broken";
+                }
+            };
+
+            DownloadPartitionContext context = new DownloadPartitionContext(gapStrategy);
+            assertThrows(IllegalStateException.class, () -> context.executePartition(1000L, 2));
+
+            // Faulty strategy with an overlap
+            ChunkPartitioningStrategy overlapStrategy = new ChunkPartitioningStrategy() {
+                @Override
+                public List<DownloadChunkRange> partition(long totalBytes, int maxWorkers) {
+                    return List.of(
+                            DownloadChunkRange.of(0, 0, 600, 0),
+                            DownloadChunkRange.of(1, 500, 999, 1) // Overlap: 500-600 duplicated!
+                    );
+                }
+
+                @Override
+                public String getStrategyName() {
+                    return "OverlapStrategy";
+                }
+
+                @Override
+                public String getDescription() {
+                    return "Broken";
+                }
+            };
+
+            context.setStrategy(overlapStrategy);
+            assertThrows(IllegalStateException.class, () -> context.executePartition(1000L, 2));
+        }
+
+        @Test
+        @DisplayName("Validation guards reject invalid parameters across strategies")
+        void testInvalidParameters() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new EqualWorkerChunkingStrategy());
+
+            assertThrows(IllegalArgumentException.class, () -> context.executePartition(0L, 4));
+            assertThrows(IllegalArgumentException.class, () -> context.executePartition(-100L, 4));
+            assertThrows(IllegalArgumentException.class, () -> context.executePartition(1000L, 0));
+            assertThrows(IllegalArgumentException.class, () -> context.executePartition(1000L, -1));
+
+            assertThrows(IllegalArgumentException.class, () -> new FixedSizeChunkingStrategy(0L));
+            assertThrows(IllegalArgumentException.class, () -> new BandwidthProportionalChunkingStrategy(List.of()));
+            assertThrows(IllegalArgumentException.class, () -> new BandwidthProportionalChunkingStrategy(List.of(-1.0)));
+        }
+
+        @Test
+        @DisplayName("ChunkPartitionSummary computes accurate analytical metrics")
+        void testChunkPartitionSummaryMetrics() {
+            DownloadPartitionContext context = new DownloadPartitionContext(new EqualWorkerChunkingStrategy());
+            List<DownloadChunkRange> chunks = context.executePartition(100_000_000L, 4);
+
+            ChunkPartitionSummary summary = context.getPartitionSummary(chunks);
+            assertEquals(4, summary.totalChunks());
+            assertEquals(100_000_000L, summary.totalBytes());
+            assertEquals(25_000_000L, summary.minChunkSize());
+            assertEquals(25_000_000L, summary.maxChunkSize());
+            assertEquals(25_000_000.0, summary.averageChunkSize());
+            assertEquals(1.0, summary.loadImbalanceRatio());
+            assertEquals(4, summary.workerByteDistribution().size());
+            assertEquals(25_000_000L, summary.workerByteDistribution().get(0));
+        }
+    }
+
+    @Nested
+    @DisplayName("Template Method Pattern Tests")
+    class TemplateMethodPatternTests {
+
+        @Test
+        @DisplayName("HttpDownloadWorkflow executes all 10 template steps in invariant order")
+        void testHttpDownloadWorkflowSuccess() {
+            AbstractDownloadWorkflow workflow = new HttpDownloadWorkflow();
+            DownloadExecutionResult result = workflow.executeDownload(
+                    "https://example.com/file.bin", "/tmp/file.bin"
+            );
+
+            assertTrue(result.success());
+            assertEquals("HttpDownloadWorkflow", result.workflowName());
+            assertEquals(50_000_000L, result.bytesTransferred());
+            assertEquals(50_000_000L, result.totalBytes());
+            assertNotNull(result.checksum());
+            assertTrue(result.checksum().startsWith("sha256:"));
+
+            List<String> steps = result.executionSteps();
+            // HTTP workflow does not require sparse pre-allocation, so step 6 is skipped -> 9 steps total
+            assertEquals(9, steps.size());
+            assertFalse(steps.stream().anyMatch(s -> s.contains("6. Pre-allocate")));
+            assertTrue(steps.get(0).contains("1. Validate"));
+            assertTrue(steps.get(1).contains("2. Prepare destination"));
+            assertTrue(steps.get(2).contains("3. Connect"));
+            assertTrue(steps.get(3).contains("4. Fetch remote metadata"));
+            assertTrue(steps.get(4).contains("5. Pre-download check"));
+            assertTrue(steps.get(5).contains("7. Transfer payload bytes"));
+            assertTrue(steps.get(6).contains("8. Verify file integrity"));
+            assertTrue(steps.get(7).contains("9. Execute post-processing"));
+            assertTrue(steps.get(8).contains("10. Workflow completed successfully"));
+        }
+
+        @Test
+        @DisplayName("ResumableDownloadWorkflow resumes from existing byte offset, downloading only missing tail")
+        void testResumableDownloadWorkflowPartialFile() {
+            // Existing file has 40 MB of 100 MB -> transfers only remaining 60 MB
+            AbstractDownloadWorkflow workflow = new ResumableDownloadWorkflow(40_000_000L);
+            DownloadExecutionResult result = workflow.executeDownload(
+                    "https://example.com/dataset.zip", "/downloads/dataset.zip"
+            );
+
+            assertTrue(result.success());
+            assertEquals(100_000_000L, result.totalBytes());
+            assertEquals(60_000_000L, result.bytesTransferred());
+            assertEquals("sha256:resumed-checksum-valid", result.checksum());
+        }
+
+        @Test
+        @DisplayName("ResumableDownloadWorkflow detects completed file and performs zero byte transfer")
+        void testResumableDownloadWorkflowAlreadyComplete() {
+            AbstractDownloadWorkflow workflow = new ResumableDownloadWorkflow(100_000_000L);
+            DownloadExecutionResult result = workflow.executeDownload(
+                    "https://example.com/dataset.zip", "/downloads/dataset.zip"
+            );
+
+            assertTrue(result.success());
+            assertEquals(0L, result.bytesTransferred());
+        }
+
+        @Test
+        @DisplayName("BitTorrentDownloadWorkflow forces sparse disk pre-allocation step via hook override")
+        void testBitTorrentDownloadWorkflowPreAllocation() {
+            AbstractDownloadWorkflow workflow = new BitTorrentDownloadWorkflow(64);
+            DownloadExecutionResult result = workflow.executeDownload(
+                    "magnet:?xt=urn:btih:da39a3ee5e6b4b0d3255bfef95601890afd80709", "/downloads/linux.iso"
+            );
+
+            assertTrue(result.success());
+            assertEquals(1_000_000_000L, result.bytesTransferred());
+            assertTrue(result.checksum().startsWith("sha1:"));
+
+            // Must include step 6 (pre-allocate storage)
+            boolean hasPreAllocation = result.executionSteps().stream()
+                    .anyMatch(step -> step.contains("6. Pre-allocate storage"));
+            assertTrue(hasPreAllocation);
+        }
+
+        @Test
+        @DisplayName("CloudStorageDownloadWorkflow downloads multipart object and checks ETag")
+        void testCloudStorageDownloadWorkflow() {
+            AbstractDownloadWorkflow workflow = new CloudStorageDownloadWorkflow("test-s3-bucket");
+            DownloadExecutionResult result = workflow.executeDownload(
+                    "s3://test-s3-bucket/images/photo.raw", "/downloads/photo.raw"
+            );
+
+            assertTrue(result.success());
+            assertEquals(250_000_000L, result.bytesTransferred());
+            assertTrue(result.checksum().contains("9b105d4bb446482f6943f732b1a6238c-10"));
+        }
+
+        @Test
+        @DisplayName("Template Method guarantees parameter validation, failure reporting, and finally cleanup")
+        void testTemplateMethodFailureHandling() {
+            AbstractDownloadWorkflow workflow = new HttpDownloadWorkflow();
+
+            // Null / blank URLs
+            DownloadExecutionResult r1 = workflow.executeDownload("", "/tmp/out");
+            assertFalse(r1.success());
+            assertNotNull(r1.errorMessage());
+
+            // Invalid URI scheme
+            DownloadExecutionResult r2 = workflow.executeDownload("invalid-scheme-url", "/tmp/out");
+            assertFalse(r2.success());
+            assertTrue(r2.errorMessage().contains("Invalid URI scheme"));
+            assertTrue(r2.executionSteps().getLast().startsWith("FAILED:"));
+        }
+
+        @Test
+        @DisplayName("Custom workflow with custom hook overrides executes hooks at precise algorithmic stages")
+        void testCustomWorkflowHooks() {
+            boolean[] hookCalled = new boolean[3]; // [preDownload, verifyIntegrity, postProcess]
+
+            AbstractDownloadWorkflow customWorkflow = new AbstractDownloadWorkflow("CustomWorkflow") {
+                @Override
+                protected void connect(String sourceUrl) throws IOException {}
+
+                @Override
+                protected long fetchContentLength(String sourceUrl) throws IOException { return 1000L; }
+
+                @Override
+                protected long transferPayload(String sourceUrl, java.nio.file.Path destination, long startByte, long expectedSize) throws IOException {
+                    return expectedSize - startByte;
+                }
+
+                @Override
+                protected void disconnect() {}
+
+                @Override
+                protected long preDownloadCheck(String sourceUrl, java.nio.file.Path destination, long remoteSize) throws IOException {
+                    hookCalled[0] = true;
+                    return 200L;
+                }
+
+                @Override
+                protected String verifyIntegrity(java.nio.file.Path destination) throws IOException {
+                    hookCalled[1] = true;
+                    return "custom-hash";
+                }
+
+                @Override
+                protected void postProcess(java.nio.file.Path destination) throws IOException {
+                    hookCalled[2] = true;
+                }
+            };
+
+            DownloadExecutionResult result = customWorkflow.executeDownload("https://custom.org/test", "/tmp/custom");
+            assertTrue(result.success());
+            assertEquals(800L, result.bytesTransferred()); // 1000 - 200
+            assertEquals("custom-hash", result.checksum());
+            assertTrue(hookCalled[0]);
+            assertTrue(hookCalled[1]);
+            assertTrue(hookCalled[2]);
+        }
+    }
+
+    @Nested
+    @DisplayName("Visitor Pattern Tests")
+    class VisitorPatternTests {
+
+        @Test
+        @DisplayName("SimpleDownloadElement correctly dispatches to visitor.visit(SimpleDownloadElement)")
+        void testSimpleDownloadElementAccept() {
+            SimpleDownloadElement element = new SimpleDownloadElement(
+                    "readme.txt", "https://example.com/readme.txt", 1000L, 1000L, "text/plain", "hash"
+            );
+
+            boolean[] visited = new boolean[1];
+            DownloadVisitor visitor = new DownloadVisitor() {
+                @Override public void visit(SimpleDownloadElement e) { visited[0] = true; assertEquals("readme.txt", e.getName()); }
+                @Override public void visit(SegmentedDownloadElement e) {}
+                @Override public void visit(MirroredDownloadElement e) {}
+                @Override public void visit(BatchDownloadElement e) {}
+            };
+
+            element.accept(visitor);
+            assertTrue(visited[0]);
+            assertEquals(100.0, element.getProgressPercentage());
+        }
+
+        @Test
+        @DisplayName("SegmentedDownloadElement correctly dispatches to visitor.visit(SegmentedDownloadElement)")
+        void testSegmentedDownloadElementAccept() {
+            SegmentedDownloadElement element = new SegmentedDownloadElement(
+                    "video.mp4", "https://example.com/video.mp4", 10_000L, 5_000L, 4, 2
+            );
+
+            boolean[] visited = new boolean[1];
+            DownloadVisitor visitor = new DownloadVisitor() {
+                @Override public void visit(SimpleDownloadElement e) {}
+                @Override public void visit(SegmentedDownloadElement e) { visited[0] = true; assertEquals(4, e.getChunkCount()); }
+                @Override public void visit(MirroredDownloadElement e) {}
+                @Override public void visit(BatchDownloadElement e) {}
+            };
+
+            element.accept(visitor);
+            assertTrue(visited[0]);
+            assertEquals(50.0, element.getProgressPercentage());
+        }
+
+        @Test
+        @DisplayName("MirroredDownloadElement correctly dispatches to visitor.visit(MirroredDownloadElement)")
+        void testMirroredDownloadElementAccept() {
+            MirroredDownloadElement element = new MirroredDownloadElement(
+                    "archive.tar", "https://primary.com/archive.tar", List.of("https://m1.com/a", "https://m2.com/a"), 50_000L, 25_000L
+            );
+
+            boolean[] visited = new boolean[1];
+            DownloadVisitor visitor = new DownloadVisitor() {
+                @Override public void visit(SimpleDownloadElement e) {}
+                @Override public void visit(SegmentedDownloadElement e) {}
+                @Override public void visit(MirroredDownloadElement e) { visited[0] = true; assertEquals(2, e.getMirrorUrls().size()); }
+                @Override public void visit(BatchDownloadElement e) {}
+            };
+
+            element.accept(visitor);
+            assertTrue(visited[0]);
+        }
+
+        @Test
+        @DisplayName("DownloadMetricsVisitor aggregates metrics across hierarchical composite structure")
+        void testDownloadMetricsVisitor() {
+            BatchDownloadElement root = new BatchDownloadElement("Root");
+            root.addElement(new SimpleDownloadElement("1.txt", "https://a.com/1", 100L, 100L, "text/plain", "h1"));
+            root.addElement(new SegmentedDownloadElement("2.bin", "https://a.com/2", 400L, 200L, 4, 2));
+
+            BatchDownloadElement sub = new BatchDownloadElement("Sub");
+            sub.addElement(new MirroredDownloadElement("3.iso", "https://a.com/3", List.of("https://m.com/3"), 500L, 100L));
+            root.addElement(sub);
+
+            DownloadMetricsVisitor visitor = new DownloadMetricsVisitor();
+            root.accept(visitor);
+
+            assertEquals(3, visitor.getTotalFilesCount());
+            assertEquals(2, visitor.getTotalBatchesCount()); // Root + Sub
+            assertEquals(4, visitor.getTotalSegmentsCount());
+            assertEquals(2, visitor.getTotalMirrorsCount()); // 1 mirror + 1 primary
+            assertEquals(1000L, visitor.getAggregatedTotalBytes());
+            assertEquals(400L, visitor.getAggregatedDownloadedBytes());
+            assertEquals(40.0, visitor.getOverallProgressPercentage());
+        }
+
+        @Test
+        @DisplayName("StorageVerificationVisitor flags dangerous file extensions, insecure URLs, and duplicate names")
+        void testStorageVerificationVisitorWarnings() {
+            BatchDownloadElement batch = new BatchDownloadElement("Untrusted");
+            batch.addElement(new SimpleDownloadElement("payload.exe", "https://a.com/payload.exe", 1000L, 0L, "app", "h1"));
+            batch.addElement(new SimpleDownloadElement("script.sh", "http://insecure.com/script.sh", 500L, 0L, "sh", "h2"));
+            batch.addElement(new SimpleDownloadElement("payload.exe", "https://a.com/payload2.exe", 1000L, 0L, "app", "h3")); // duplicate name!
+
+            StorageVerificationVisitor visitor = new StorageVerificationVisitor();
+            batch.accept(visitor);
+
+            assertFalse(visitor.isApproved());
+            assertEquals(2500L, visitor.getRequiredRemainingDiskBytes());
+            List<String> warnings = visitor.getWarnings();
+            assertTrue(warnings.stream().anyMatch(w -> w.contains(".exe")));
+            assertTrue(warnings.stream().anyMatch(w -> w.contains(".sh")));
+            assertTrue(warnings.stream().anyMatch(w -> w.contains("Insecure HTTP")));
+            assertTrue(warnings.stream().anyMatch(w -> w.contains("Filename collision")));
+        }
+
+        @Test
+        @DisplayName("StorageVerificationVisitor approves clean and secure download batch")
+        void testStorageVerificationVisitorApproved() {
+            BatchDownloadElement batch = new BatchDownloadElement("SecureBatch");
+            batch.addElement(new SimpleDownloadElement("document.pdf", "https://secure.org/doc.pdf", 2000L, 1000L, "pdf", "h"));
+            batch.addElement(new SegmentedDownloadElement("archive.tar.gz", "https://secure.org/arch.tar.gz", 8000L, 4000L, 4, 2));
+
+            StorageVerificationVisitor visitor = new StorageVerificationVisitor();
+            batch.accept(visitor);
+
+            assertTrue(visitor.isApproved());
+            assertTrue(visitor.getWarnings().isEmpty());
+            assertEquals(5000L, visitor.getRequiredRemainingDiskBytes());
+        }
+
+        @Test
+        @DisplayName("JsonExportVisitor serializes download tree into structured JSON")
+        void testJsonExportVisitor() {
+            BatchDownloadElement batch = new BatchDownloadElement("JsonTest");
+            batch.addElement(new SimpleDownloadElement("doc.txt", "https://a.com/doc.txt", 100L, 50L, "text/plain", "h1"));
+            batch.addElement(new SegmentedDownloadElement("chunks.bin", "https://a.com/c.bin", 200L, 100L, 2, 2));
+
+            JsonExportVisitor visitor = new JsonExportVisitor();
+            batch.accept(visitor);
+            String json = visitor.getJsonOutput();
+
+            assertNotNull(json);
+            assertTrue(json.contains("\"type\": \"BATCH\""));
+            assertTrue(json.contains("\"name\": \"JsonTest\""));
+            assertTrue(json.contains("\"children\": ["));
+            assertTrue(json.contains("\"type\": \"SIMPLE\""));
+            assertTrue(json.contains("\"name\": \"doc.txt\""));
+            assertTrue(json.contains("\"type\": \"SEGMENTED\""));
+            assertTrue(json.contains("\"name\": \"chunks.bin\""));
+        }
+
+        @Test
+        @DisplayName("BandwidthAllocationVisitor distributes bandwidth pool proportionally based on element weights")
+        void testBandwidthAllocationVisitor() {
+            BatchDownloadElement batch = new BatchDownloadElement("QoSTest");
+            SimpleDownloadElement simple = new SimpleDownloadElement("s.txt", "https://a.com/s", 100L, 0L, "text", "h");
+            SegmentedDownloadElement seg = new SegmentedDownloadElement("seg.bin", "https://a.com/seg", 1000L, 0L, 4, 3); // 3 connections -> weight 6.0
+            MirroredDownloadElement mirror = new MirroredDownloadElement("m.iso", "https://a.com/m", List.of("https://m.com/m"), 2000L, 0L); // weight 2.5
+
+            batch.addElement(simple);
+            batch.addElement(seg);
+            batch.addElement(mirror);
+
+            BandwidthAllocationVisitor visitor = new BandwidthAllocationVisitor(95_000_000L); // 95 MB/s
+            batch.accept(visitor);
+            var allocations = visitor.computeAllocations();
+
+            assertEquals(3, allocations.size());
+            // Segmented (weight 6.0) gets more than mirrored (2.5), which gets more than simple (1.0)
+            assertTrue(allocations.get(seg.getId()) > allocations.get(mirror.getId()));
+            assertTrue(allocations.get(mirror.getId()) > allocations.get(simple.getId()));
+
+            long sum = allocations.values().stream().mapToLong(Long::longValue).sum();
+            assertEquals(95_000_000L, sum);
+        }
+
+        @Test
+        @DisplayName("DownloadElement getProgressPercentage clamps between 0.0 and 100.0")
+        void testProgressPercentageClamping() {
+            SimpleDownloadElement empty = new SimpleDownloadElement("0.bin", "https://a.com/0", 0L, 0L, "bin", "h");
+            assertEquals(0.0, empty.getProgressPercentage());
+
+            SimpleDownloadElement half = new SimpleDownloadElement("50.bin", "https://a.com/50", 200L, 100L, "bin", "h");
+            assertEquals(50.0, half.getProgressPercentage());
+
+            SimpleDownloadElement over = new SimpleDownloadElement("100.bin", "https://a.com/100", 200L, 300L, "bin", "h");
+            assertEquals(100.0, over.getProgressPercentage());
         }
     }
 }
