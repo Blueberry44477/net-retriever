@@ -114,6 +114,10 @@ All behavioral patterns are implemented under [`io.github.blueberry44477.net_ret
 | **Mediator** | `DownloadSessionMediator` *(Mediator)*<br>`DownloadCoordinatorMediator` *(ConcreteMediator)*<br>`DownloadColleague` *(Colleague)*<br>`DownloaderColleague`<br>`StorageColleague`<br>`BandwidthColleague`<br>`NotificationColleague` *(ConcreteColleagues)* | Encapsulates and coordinates complex interactions among decoupled subsystems (network streaming engine, disk storage guardian, bandwidth QoS manager, notification alerts). Eliminates direct $M \times N$ colleague dependencies, orchestrating automated actions like emergency downloader pausing on low disk space and stream throttling during network congestion. |
 | **Memento** | `TaskMemento` *(NarrowMemento)*<br>`DownloadTaskMemento` *(WideMemento)*<br>`DownloadTaskOriginator` *(Originator)*<br>`DownloadCheckpointCaretaker` *(Caretaker)* | Captures and externalizes the complete internal execution state of download tasks without violating encapsulation. Provides a narrow interface to Caretakers for checkpoint stack management (Undo/Redo rollbacks and named milestone recovery) while granting wide restoration access only to the Originator. |
 | **Observer** | `DownloadObservable` *(Subject)*<br>`DownloadObserver` *(Observer)*<br>`DownloadProgressEvent` *(EventPayload)*<br>`DownloadTaskSubject` *(ConcreteSubject)*<br>`ConsoleProgressObserver`<br>`SpeedTelemetryObserver`<br>`AuditLoggingObserver`<br>`DownloadCompletionWebhookObserver` *(ConcreteObservers)* | Defines a one-to-many subscription dependency where subject state changes automatically notify and update diverse decoupled observers (real-time ASCII progress bar, throughput & ETA calculations, audit compliance logging, and completion/error HTTP webhooks). |
+| **State** | `DownloadState` *(State)*<br>`DownloadTaskStateContext` *(Context)*<br>`CreatedDownloadState`<br>`DownloadingDownloadState`<br>`PausedDownloadState`<br>`RetryingDownloadState`<br>`CompletedDownloadState`<br>`ErrorDownloadState`<br>`CanceledDownloadState` *(ConcreteStates)* | Encapsulates lifecycle states as first-class polymorphic objects, eliminating conditional `switch`/`if-else` branching in task entities. Strictly guards against invalid state transitions and manages automatic resilience and fault-tolerant reconnection through the transient `RETRYING` state. |
+| **Strategy** | `ChunkPartitioningStrategy` *(Strategy)*<br>`DownloadPartitionContext` *(Context)*<br>`DownloadChunkRange` *(ValueObject)*<br>`FixedSizeChunkingStrategy`<br>`EqualWorkerChunkingStrategy`<br>`AdaptiveDynamicChunkingStrategy`<br>`BandwidthProportionalChunkingStrategy` *(ConcreteStrategies)* | Encapsulates interchangeable payload byte-range chunking algorithms for multi-threaded downloads. Eliminates worker idle time by dynamically adapting partitions based on file size tiers, buffer sizes, and heterogeneous mirror/worker bandwidth capacities while guaranteeing zero-gap, non-overlapping coverage. |
+| **Template Method** | `AbstractDownloadWorkflow` *(AbstractClass)*<br>`HttpDownloadWorkflow`<br>`ResumableDownloadWorkflow`<br>`BitTorrentDownloadWorkflow`<br>`CloudStorageDownloadWorkflow` *(ConcreteWorkflows)*<br>`DownloadExecutionResult` *(ResultRecord)* | Defines the invariant sequential execution skeleton (`executeDownload`) for network retrievals, enforcing the Hollywood Principle. Defers primitive steps (`connect`, `fetchContentLength`, `transferPayload`, `disconnect`) to protocol-specific subclasses and provides hooks for partial file resumption, contiguous sparse storage allocation, and checksum validation. |
+| **Visitor** | `DownloadElement` *(Element)*<br>`SimpleDownloadElement`<br>`SegmentedDownloadElement`<br>`MirroredDownloadElement`<br>`BatchDownloadElement` *(ConcreteElements)*<br>`DownloadVisitor` *(Visitor)*<br>`DownloadMetricsVisitor`<br>`StorageVerificationVisitor`<br>`JsonExportVisitor`<br>`BandwidthAllocationVisitor` *(ConcreteVisitors)* | Defines new operations over complex composite download task structures without modifying element classes via double dispatch (`element.accept(visitor) -> visitor.visit(this)`). Supports decoupled telemetry calculation, disk space/security audits, formatted JSON serialization, and dynamic QoS bandwidth allocation. |
 
 ---
 
@@ -160,6 +164,14 @@ net-retriever/
 │   │   │           │   └── memento.md  # Architecture documentation
 │   │   │           ├── observer/       # Reactive progress notifications & telemetry observers
 │   │   │           │   └── observer.md # Architecture documentation
+│   │   │           ├── state/          # Task lifecycle states, transitions & retry resilience
+│   │   │           │   └── state.md    # Architecture documentation
+│   │   │           ├── strategy/       # Interchangeable chunk partitioning algorithms
+│   │   │           │   └── strategy.md # Architecture documentation
+│   │   │           ├── template_method/# Invariant download execution skeleton & protocol hooks
+│   │   │           │   └── template_method.md # Architecture documentation
+│   │   │           ├── visitor/        # Decoupled operations over hierarchical task structures
+│   │   │           │   └── visitor.md  # Architecture documentation
 │   │   │           └── BehavioralPatternsDemo.java
 │   │   └── resources/
 │   │       ├── application.yaml
@@ -171,7 +183,7 @@ net-retriever/
 │           ├── structural/
 │           │   └── StructuralPatternsTest.java # JUnit 5 test suite (41 tests)
 │           └── behavioral/
-│               └── BehavioralPatternsTest.java # JUnit 5 test suite (37 tests)
+│               └── BehavioralPatternsTest.java # JUnit 5 test suite (77 tests)
 ```
 
 ---
@@ -196,14 +208,14 @@ java -cp target/classes io.github.blueberry44477.net_retriever.patterns.structur
 ```
 
 ### Running the Behavioral Patterns Demonstration
-To run the interactive CLI demonstration showcasing Chain of Responsibility, Command, Iterator, Mediator, Memento, and Observer patterns:
+To run the interactive CLI demonstration showcasing Chain of Responsibility, Command, Iterator, Mediator, Memento, Observer, State, Strategy, Template Method, and Visitor patterns:
 ```bash
 ./mvnw clean compile
 java -cp target/classes io.github.blueberry44477.net_retriever.patterns.behavioral.BehavioralPatternsDemo
 ```
 
 ### Running Unit Tests
-Dedicated JUnit 5 suites test all creational, structural, and behavioral patterns (94 tests in total):
+Dedicated JUnit 5 suites test all creational, structural, and behavioral patterns (134 tests in total):
 
 ```bash
 # Run creational pattern tests
@@ -212,10 +224,10 @@ Dedicated JUnit 5 suites test all creational, structural, and behavioral pattern
 # Run structural pattern tests
 ./mvnw test -Dtest=StructuralPatternsTest
 
-# Run behavioral pattern tests
+# Run behavioral pattern tests (77 tests)
 ./mvnw test -Dtest=BehavioralPatternsTest
 
-# Run all pattern tests (94 tests)
+# Run all pattern tests (134 tests)
 ./mvnw test -Dtest=CreationalPatternsTest,StructuralPatternsTest,BehavioralPatternsTest
 ```
 
